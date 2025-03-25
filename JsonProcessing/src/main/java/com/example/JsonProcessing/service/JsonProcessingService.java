@@ -70,12 +70,6 @@ public class JsonProcessingService {
         }
     }
 
-    /**
-     * Reads, processes, and archives a JSON file.
-     * The file is read, parsed into a JsonData object, and processed based on its jobInfo.referenceIdentifier.
-     * Afterwards, the file is moved to the archive folder.
-
-     */
     private void processAndArchiveFile(Path filePath, String archiveFolderPath) {
         int maxRetries = 3;
         JsonData data = null;
@@ -146,13 +140,17 @@ public class JsonProcessingService {
         // List to store received ray information for this reference.
         private final List<RayInfo> records = new ArrayList<>();
         private final Logger logger = LoggerFactory.getLogger(RefProcessor.class);
-
+        //declare 3 variables of type Atomic Number SuccessCount,FailureCount,OtherStatusCount
+        private final AtomicInteger successCount = new AtomicInteger(0);
+        private final AtomicInteger failureCount = new AtomicInteger(0);
+        private final AtomicInteger otherStatusCount = new AtomicInteger(0);
+        private final AtomicInteger totalRecords = new AtomicInteger(0);
         public RefProcessor(String referenceIdentifier, int expectedTransactionCount,
                             ScheduledExecutorService scheduler, Runnable onFinishCallback) {
             this.referenceIdentifier = referenceIdentifier;
             this.scheduler = scheduler;
             this.onFinishCallback = onFinishCallback;
-            scheduleTimer();
+            timerInitiate();
             logger.info("Initialized RefProcessor for refId: {} with expected transaction count: {}",
                     referenceIdentifier, expectedTransactionCount);
         }
@@ -166,6 +164,14 @@ public class JsonProcessingService {
         public synchronized void processFile(JsonData data) {
             String rayId = data.getTrackingInfo().getRayIdentifier();
             String state = data.getTrackingInfo().getState();
+            totalRecords.set(data.getJobInfo().getTransactionCount());
+            if ("SUCCESS".equalsIgnoreCase(state)) {
+                successCount.incrementAndGet();
+            } else if ("FAILURE".equalsIgnoreCase(state)) {
+                failureCount.incrementAndGet();
+            } else {
+                otherStatusCount.incrementAndGet();
+            }
             records.add(new RayInfo(rayId, state));
             logger.info("Received file for refId: {}: rayId: {}, state: {}. Total records: {}",
                     referenceIdentifier, rayId, state, records.size());
@@ -184,11 +190,11 @@ public class JsonProcessingService {
             if (scheduledFuture != null) {
                 scheduledFuture.cancel(false);
             }
-            scheduleTimer();
+            timerInitiate();
         }
 
-        private void scheduleTimer() {
-            scheduledFuture = scheduler.schedule(this::finish, 1, TimeUnit.MINUTES);
+        private void timerInitiate() {
+            scheduledFuture = scheduler.schedule(this::finish, 5, TimeUnit.MINUTES);
             logger.info("Scheduled finish timer for refId: {} in 5 minutes", referenceIdentifier);
         }
 
@@ -210,11 +216,27 @@ public class JsonProcessingService {
             for (Map.Entry<String, String> entry : sortedRayData.entrySet()) {
                 logger.info("{}. Ray Identifier: {} | State: {}", counter++, entry.getKey(), entry.getValue());
             }
+            if(check1()){
+                logger.info("All data recieved");
+                resetCounter(referenceIdentifier);
+            }
+            //log success ,failure,other status count
+            logger.info("Success count: {}", successCount.get());
+            logger.info("Failure count: {}", failureCount.get());
+            logger.info("Other status count: {}", otherStatusCount.get());
             logger.info("Total ray_ids processed for refId {}: {}", referenceIdentifier, records.size());
             records.clear();
             onFinishCallback.run();
             logger.info("Finished processing for refId: {}", referenceIdentifier);
         }
+
+        private boolean check1() {
+            return   totalRecords.get()== successCount.get() + failureCount.get() + otherStatusCount.get();
+        }
+    }
+//clear referenceIdenfier from refProcessors map
+    private void resetCounter(String referenceIdentifier) {
+        refProcessors.remove(referenceIdentifier);
     }
 
 
@@ -235,4 +257,29 @@ public class JsonProcessingService {
             return state;
         }
     }
+    // getSucess(refId) method to get the success count of the reference identifier
+    public int getSuccess(String refId) {
+        RefProcessor processor = refProcessors.get(refId);
+        if (processor != null) {
+            return processor.successCount.get();
+        }
+        return -1;
+    }
+    // getFailure(refId) method to get the failure count of the reference identifier
+    public int getFailure(String refId) {
+        RefProcessor processor = refProcessors.get(refId);
+        if (processor != null) {
+            return processor.failureCount.get();
+        }
+        return -1;
+    }
+    // getOtherStatus(refId) method to get the other status count of the reference identifier
+    public int getOtherStatus(String refId) {
+        RefProcessor processor = refProcessors.get(refId);
+        if (processor != null) {
+            return processor.otherStatusCount.get();
+        }
+        return -1;
+    }
+
 }
